@@ -2,26 +2,25 @@
 
 # make sure this is the same version you aligned NMT to
 # it will make additional steps easier
-S=Scholes
+S=Keane
 
+# set some paths
 nmt_fld=/NHP_MRI/Template/NMT_v2.0/NMT_v2.0_sym/NMT_v2.0_sym
 nmt=${nmt_fld}/NMT_v2.0_sym.nii.gz
 nmtb=${nmt_fld}/NMT_v2.0_sym_brainmask.nii.gz
 nmt_ss=/NHP_MRI/Template/NMT_v2.0/NMT_v2.0_sym/SingleSubjects/input_files
-
 skull_fld=/NHP_MRI/Mircen/Skulls
 skull_fld_ss=${skull_fld}/${S}
-
+# create folder and copy scan
 mkdir -p ${skull_fld_ss}
-
 cp ${nmt_ss}/${S}.nii.gz ${skull_fld_ss}/${S}.nii.gz
 
+# warp NMT 2 sub (aff)
 3dAllineate -source ${nmt} \
 	-base ${skull_fld_ss}/${S}.nii.gz \
 	-prefix ${skull_fld_ss}/NMT_srs2${S}.nii.gz \
 	-cost lpc -cmass -warp srs \
 	-1Dparam_save ${skull_fld_ss}/1Dmat
-
 flirt -in ${nmt} -ref ${skull_fld_ss}/NMT_srs2${S}.nii.gz -dof 9 \
 	-out ${skull_fld_ss}/nmt_aff2ind.nii.gz -omat ${skull_fld_ss}/LT.mat
 flirt -in ${nmtb} -ref ${skull_fld_ss}/${S}.nii.gz  \
@@ -29,26 +28,45 @@ flirt -in ${nmtb} -ref ${skull_fld_ss}/${S}.nii.gz  \
 3dAutomask -dilate 6.0 -prefix ${skull_fld_ss}/brainmask_dil.nii.gz ${skull_fld_ss}/brainmask.nii.gz -overwrite
 cp ${skull_fld_ss}/brainmask_dil.nii.gz ${skull_fld_ss}/brainmask_dil_ed.nii.gz
 
-# Here, you are going to have to get your hand dirty and touch up that brainmask_dil_ed.nii.gz
-
 3dAutomask -dilate 5.0 -prefix ${skull_fld_ss}/${S}_am.nii.gz ${skull_fld_ss}/${S}.nii.gz -overwrite
 fslmaths ${skull_fld_ss}/${S}.nii.gz -mas ${skull_fld_ss}/${S}_am.nii.gz ${skull_fld_ss}/${S}_preskull.nii.gz
 
-# Manually inspect and set the upper threshold for dark inclusion
+# Manually inspect ${S}.nii.gz and set the upper threshold for dark inclusion
 UTH=40
 fslmaths ${skull_fld_ss}/${S}.nii.gz -uthr ${UTH} -bin ${skull_fld_ss}/preskull.nii.gz
 fslmaths ${skull_fld_ss}/preskull.nii.gz -mas ${skull_fld_ss}/${S}_am.nii.gz ${skull_fld_ss}/skull.nii.gz
 
-# mask skull with dilated and edited brainmask
-fslmaths ${skull_fld_ss}/skull.nii.gz -mas ${skull_fld_ss}/brainmask_dil_ed.nii.gz ${skull_fld_ss}/skull2.nii.gz
-cp ${skull_fld_ss}/skull2.nii.gz ${skull_fld_ss}/skull2_ed.nii.gz
+# ==============================================================================================
+# Here, you are going to have to get your hands dirty and touch up that brainmask_dil_ed.nii.gz
+# Use what ever software you like, FSLEYES, ITKSNAP, SLICER or FREEVIEW should all be fine
+#
+# What you want to end up with is a mask that encompasses the skull space. This mask is created
+# from a dilated brainmask so it will miss anterior skull but will likely be ok where the skull
+# is closer to the brain 
+#
+# Similarly you may also want to edit skull.nii.gz to add some missing voxels
+# ============================================================================================== 
 
-# Here, you are going to have to get your hand dirty and touch up that brainmask_dil_ed.nii.gz
-# correct the skull mask in fsleyes
+# mask skull with dilated and edited brainmask
+fslmaths ${skull_fld_ss}/skull.nii.gz \
+	-mas ${skull_fld_ss}/brainmask_dil_ed.nii.gz \
+	${skull_fld_ss}/skull2.nii.gz
+cp ${skull_fld_ss}/skull2.nii.gz ${skull_fld_ss}/skull2_ed.nii.gz
 
 # smooth (you may need to tinker with the gaussian width)
 fslmaths ${skull_fld_ss}/skull2_ed.nii.gz -kernel gauss 0.5 \
 	-fmean -thr 0.1 -bin ${skull_fld_ss}/skull2s.nii.gz
+
+# cut off the bottom that doesn't mkae sense
+fslroi ${skull_fld_ss}/skull2s.nii.gz ${skull_fld_ss}/skull2s_top.nii.gz \
+	0 -1 50 50 0 -1 
+
 # generate stl surface
-IsoSurface -isorois -Tsmooth 0.01 500 -input ${skull_fld_ss}/skull2s.nii.gz  \
+IsoSurface -isorois -Tsmooth 0.01 500 -input ${skull_fld_ss}/skull2s_top.nii.gz  \
 	-o_stl ${skull_fld_ss}/skull_final.stl -overwrite
+
+# =============================================================================================
+# Now that we have a mesh of the skull, go to Meshlab to edit it:
+# - remove loose islands
+# - smooth and simplify
+# =============================================================================================
